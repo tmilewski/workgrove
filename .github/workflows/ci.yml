@@ -114,7 +114,8 @@ jobs:
   test:
     name: Run Test Matrix (${{ matrix.os }})
     needs: [formatting, changesets]
-    if: inputs.release-check || needs.changesets.outputs.rust-changed == 'true'
+    env:
+      RUN_RUST: ${{ inputs.release-check || needs.changesets.outputs.rust-changed == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -122,24 +123,32 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
+      - name: Report tests not needed
+        if: env.RUN_RUST != 'true'
+        run: echo "No Rust or build inputs changed; tests are not needed."
       - uses: actions/checkout@v4
+        if: env.RUN_RUST == 'true'
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+        if: env.RUN_RUST == 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        if: env.RUN_RUST == 'true'
         with:
           key: ${{ matrix.os }}-${{ inputs.release-check && 'release' || 'test' }}
       - name: Install Linux test dependencies
-        if: runner.os == 'Linux'
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux'
         run: |
           if ! command -v lsof > /dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y lsof
           fi
       - run: cargo clippy --locked --all-targets -- -D warnings
+        if: env.RUN_RUST == 'true'
       - run: cargo test --locked --all-targets
+        if: env.RUN_RUST == 'true'
       - name: Verify optimized release build
         if: inputs.release-check
         run: cargo build --locked --release

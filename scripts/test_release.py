@@ -136,8 +136,12 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     release.changesets(self.root)
 
-    def test_empty_changeset_satisfies_pr_check(self):
+    def test_docs_pr_requires_empty_frontmatter_changeset(self):
         base = self.init_base()
+        (self.root / "docs.md").write_text("Documentation")
+        self.commit()
+        with self.assertRaisesRegex(ValueError, "PR must add"):
+            release.check_pr(self.root, base)
         (self.root / ".changeset/ci.md").write_text("---\n---\n")
         self.commit()
         release.check_pr(self.root, base)
