@@ -56,8 +56,11 @@ Run `python3 scripts/release.py check --base origin/main` to check a committed P
 4. Manually run **Publish release** on `main` when ready to publish. Merging a PR
    never publishes a release. The workflow runs CI on the selected commit, then
    creates `vX.Y.Z` and a GitHub release using that version's changelog entry.
-   Releases contain GitHub's
-   source archives; this workflow does not publish to crates.io or attach binaries.
+   Releases include executable archives for macOS (Intel and Apple Silicon) and
+   Linux (x86_64 and ARM64), plus `SHA256SUMS` and GitHub's source archives.
+   Each executable is built and smoke-tested on its native OS and architecture.
+   New releases remain drafts until all downloads are uploaded. This workflow
+   does not publish to crates.io.
 
 To let **Create release** open its PR, GitHub requires **Settings → Actions →
 General → Allow GitHub Actions to create and approve pull requests**. This is a
@@ -72,7 +75,8 @@ Create release explicitly dispatches CI on the generated branch
 because PRs created with that token do not automatically trigger PR workflows.
 
 If publishing fails, rerun the failed workflow on the original release commit.
-An already published release is skipped. An existing tag must point to that
+An existing release has its downloadable assets replaced, so reruns repair
+incomplete uploads. An existing tag must point to that
 exact commit. Both release workflows are manual-only and run only on `main`.
 
 ## Contributor approval
