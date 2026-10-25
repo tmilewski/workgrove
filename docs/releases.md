@@ -52,6 +52,11 @@ python3 scripts/release.py check
   Merging a PR must not publish or auto-approve/auto-merge a release PR.
 - Preserve the full Rust matrix and optimized builds before publication. When
   adding build inputs, update CI change detection so relevant PRs run the matrix.
+- Keep the OS-specific test matrix jobs present for every eligible CI run so
+  required checks receive a result. For documentation-only changes, skip Rust
+  setup and test steps rather than the matrix job: a job-level condition is
+  evaluated before matrix expansion and leaves OS-specific checks missing.
+  Release checks always run the full matrix and optimized builds.
 - Retrying publication must check that an existing version tag points to the
   same commit and skip an already published release.
 - Test workflow/script changes without dispatching publication or pushing tags.
