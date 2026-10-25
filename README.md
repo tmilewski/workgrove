@@ -39,6 +39,84 @@ The source checkouts stay on their existing branches. Their uncommitted changes
 are not copied. Branches and Git objects are shared with the source repositories,
 as with ordinary Git worktrees. The destination must not already exist.
 
+## Settings
+
+Global settings live at `~/.config/workgrove/config.json` (or
+`$XDG_CONFIG_HOME/workgrove/config.json`). Folder and repo settings live in
+`.workgrove.json`. Workgrove searches from the source directory up to the
+filesystem root, and does the same for each selected repo.
+
+A global or root-folder file can configure several directories:
+
+```json
+{
+  "~/Code/Workgrove": {
+    "workspace_destination": "./.workgrove/trees",
+    "include": ["./api", "./web"],
+    "exclude": [],
+    "directories": {
+      "./api": { "after_create": ["pnpm install"] },
+      "./web": { "after_create": ["pnpm install", "pnpm build"] }
+    }
+  },
+  "~/Code/AnotherProject": {
+    "workspace_destination": "~/worktrees/another-project"
+  }
+}
+```
+
+A repo's `.workgrove.json` can contain the settings directly. This flat form also
+works in a root folder and applies to that folder and its descendants:
+
+```json
+{
+  "workspace_destination": "./.workgrove/trees",
+  "after_create": ["pnpm install"]
+}
+```
+
+Profiles apply to the named directory and its descendants. More-specific
+profiles override broader profiles, field by field. For the same directory,
+folder files override the global file, and files closer to the source override
+ancestor files. Arrays **replace** inherited arrays; an explicit `[]` clears
+an inherited value. Omitted fields inherit. Nested `directories` entries must
+point below their containing profile.
+
+Relative profile keys are resolved from the settings file; nested keys and
+settings paths are resolved from their profile directory. In a flat file,
+relative paths are resolved from the file's directory. `~` expands to your home.
+These paths do not depend on the shell's current directory.
+
+| Setting | Default and behavior |
+| --- | --- |
+| `workspace_destination` | `<source>/.workgrove/trees`; the workspace is created at `<workspace_destination>/<name>` |
+| `include` | Discover immediate child Git repos; when specified, use exactly these repo paths |
+| `exclude` | `[]`; omit these paths from discovery or `include` |
+| `after_create` | `[]`; shell commands run in each new repo worktree after all worktrees are created |
+| `after_remove` | `[]`; shell commands run in each source repo after the workspace is removed |
+
+`include` and `exclude` use directory paths, not globs. Selected repos must be
+immediate children of the source folder. `--repo` replaces both filters;
+`--destination` sets the exact destination and overrides the configured parent.
+Destination and repo selection are resolved for the source folder; child repo
+profiles control that repo's hooks, not the location of the shared workspace.
+
+`--source` defaults to the current directory. When the source is itself a Git
+repo, Workgrove creates a single-repo workspace. Both single-repo and multi-repo
+workspaces retain the layout `<destination>/<repo-name>`.
+
+```sh
+workgrove create task-name
+```
+
+Hooks support `{name}`, `{workspace}`, and `{repo}` substitutions. Resolved hooks
+are saved in the recovery record, so config edits affect future workspaces.
+Completed hook lists are skipped on recovery; if a list fails or is interrupted,
+`resume` retries that repo's list from the beginning. Commands should therefore
+be safe to repeat. Hook output goes to stderr to keep stdout valid JSON.
+Dependency installs can create ignored files that block removal; `after_remove`
+runs only after removal succeeds and cannot clean up those blockers beforehand.
+
 With an origin remote, creation fetches it and uses the locally configured
 `origin/HEAD` as the base. Without remotes, it uses the source's current branch.
 If `origin/HEAD` is missing, specify the base explicitly. Select a subset or override
@@ -143,7 +221,7 @@ precede the subcommand. Exit codes:
 
 ## Scope and limits
 
-- Immediate child repos only; no submodules, bare repos, symlinked repo roots,
+- A source repo or its immediate child repos only; no submodules, bare repos, symlinked repo roots,
   nested discovery, or multiple checkouts of the same repository.
 - Exactly one `origin` remote or no remotes. GitHub.com PR verification supports
   standard HTTPS, SCP-style SSH, and `ssh://git@github.com/` URLs. GitLab, GitHub
@@ -151,8 +229,8 @@ precede the subcommand. Exit codes:
   another repository need additional provider support. Unsupported remotes can
   be used to create workspaces, but block automatic removal.
 - Source repositories must remain at their recorded locations.
-- No automatic editor registration, process termination, dependency installation,
-  copying of root documents, or copying of environment files.
+- No automatic editor registration or process termination. Dependency installation
+  and file copying require explicitly configured hooks.
 - The process check covers what `lsof` can observe for the current user. The lock
   coordinates Workgrove commands, not editors or external Git commands. Stop all
   writers before removal: checks cannot prevent another program from writing a

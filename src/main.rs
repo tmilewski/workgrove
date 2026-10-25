@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use fs2::FileExt;
+mod settings;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,10 +26,10 @@ struct Cli {
 enum Cmd {
     Create {
         name: String,
-        #[arg(long)]
+        #[arg(long, default_value = ".")]
         source: PathBuf,
         #[arg(long)]
-        destination: PathBuf,
+        destination: Option<PathBuf>,
         #[arg(long = "repo")]
         repos: Vec<String>,
         #[arg(long = "base")]
@@ -49,6 +50,37 @@ enum Cmd {
     List,
 }
 type R<T> = Result<T, String>;
+fn run_hooks(commands: &[String], cwd: &Path, name: &str, workspace: &Path, repo: &str) -> R<()> {
+    for command in commands {
+        let expanded = command
+            .replace("{name}", name)
+            .replace("{workspace}", &workspace.to_string_lossy())
+            .replace("{repo}", repo);
+        let output = Command::new("sh")
+            .args(["-c", &expanded])
+            .current_dir(cwd)
+            .output()
+            .map_err(|e| format!("Cannot start lifecycle command `{command}`: {e}"))?;
+        if !output.stdout.is_empty() {
+            std::io::stderr()
+                .write_all(&output.stdout)
+                .map_err(|e| e.to_string())?;
+        }
+        if !output.stderr.is_empty() {
+            std::io::stderr()
+                .write_all(&output.stderr)
+                .map_err(|e| e.to_string())?;
+        }
+        if !output.status.success() {
+            return Err(format!(
+                "Lifecycle command failed ({}) in {}: {command}",
+                output.status,
+                cwd.display()
+            ));
+        }
+    }
+    Ok(())
+}
 fn run(cmd: &str, args: &[&str], cwd: Option<&Path>, allowed: &[i32]) -> R<Output> {
     let mut c = Command::new(cmd);
     c.args(args);
@@ -155,7 +187,7 @@ fn lock() -> R<File> {
 fn create(
     name: &str,
     source: &Path,
-    dest: &Path,
+    dest: Option<&Path>,
     selected: &[String],
     bases: &[String],
 ) -> R<Value> {
@@ -163,16 +195,27 @@ fn create(
     if record_path(name)?.exists() {
         return Err("Workspace name already exists; use resume or choose a new name".into());
     }
-    if dest.exists() {
-        return Err("Destination must not exist".into());
-    }
-    let dest = resolve(&expand_user(dest))?;
-    if resolve(&state())?.starts_with(&dest) {
-        return Err("Recovery records must be outside the workspace".into());
-    }
     let src = expand_user(source)
         .canonicalize()
         .map_err(|e| e.to_string())?;
+    let workspace_settings = settings::load(&src)?;
+    let destination = match dest {
+        Some(path) => {
+            settings::absolute(path, &std::env::current_dir().map_err(|e| e.to_string())?)?
+        }
+        None => workspace_settings
+            .workspace_destination
+            .clone()
+            .unwrap_or_else(|| src.join(".workgrove/trees"))
+            .join(name),
+    };
+    if destination.exists() {
+        return Err("Destination must not exist".into());
+    }
+    let dest = resolve(&expand_user(&destination))?;
+    if resolve(&state())?.starts_with(&dest) {
+        return Err("Recovery records must be outside the workspace".into());
+    }
     let mut base_overrides = BTreeMap::new();
     for spec in bases {
         let (repo, base) = spec.split_once('=').ok_or("Use --base repository=ref")?;
@@ -182,26 +225,44 @@ fn create(
         }
         base_overrides.insert(repo, base);
     }
-    let mut paths = vec![];
-    if selected.is_empty() {
-        for e in fs::read_dir(&src).map_err(|e| e.to_string())? {
-            let p = e.map_err(|e| e.to_string())?.path();
+    let mut paths = if !selected.is_empty() {
+        selected
+            .iter()
+            .map(|n| {
+                valid(n)?;
+                Ok(src.join(n))
+            })
+            .collect::<R<Vec<_>>>()?
+    } else if src.join(".git").exists() {
+        vec![src.clone()]
+    } else if let Some(include) = &workspace_settings.include {
+        include.clone()
+    } else {
+        let mut discovered = Vec::new();
+        for entry in fs::read_dir(&src).map_err(|e| e.to_string())? {
+            let p = entry.map_err(|e| e.to_string())?.path();
             if p.is_dir() && !p.is_symlink() && p.join(".git").exists() {
-                paths.push(p)
+                discovered.push(p);
             }
         }
-        paths.sort()
-    } else {
-        for n in selected {
-            valid(n)?;
-            let p = src.join(n);
-            if !p.is_dir() || p.is_symlink() || !p.join(".git").exists() {
-                return Err(format!(
-                    "Not a direct, non-symlink Git checkout: {}",
-                    p.display()
-                ));
-            }
-            paths.push(p)
+        discovered.sort();
+        discovered
+    };
+    if selected.is_empty() {
+        paths.retain(|p| !workspace_settings.exclude.contains(p));
+    }
+    let mut unique = BTreeSet::new();
+    paths.retain(|p| unique.insert(p.clone()));
+    for p in &paths {
+        if (p != &src && p.parent() != Some(src.as_path()))
+            || !p.is_dir()
+            || p.is_symlink()
+            || !p.join(".git").exists()
+        {
+            return Err(format!(
+                "Not a direct, non-symlink Git checkout: {}",
+                p.display()
+            ));
         }
     }
     if paths.is_empty() {
@@ -240,8 +301,11 @@ fn create(
             ));
         }
         let nm = p.file_name().unwrap().to_string_lossy().to_string();
-        if dest.starts_with(&p) {
-            return Err("Destination must be outside source repositories".into());
+        let repo_settings = settings::load(&p)?;
+        if dest.starts_with(&p) && p != src {
+            return Err(
+                "Destination must be outside source repositories in a multi-repo workspace".into(),
+            );
         }
         let rem = git(&p, &["remote"])?;
         let remotes: Vec<_> = rem.lines().collect();
@@ -296,7 +360,9 @@ fn create(
         if !identities.insert(common.clone()) {
             return Err("Source includes multiple checkouts of the same repository".into());
         }
-        entries.push(json!({"name":nm,"source":p,"path":dest.join(&nm),"common_dir":common,"base":base,"initial":initial,"branch":branch,"remote":remote,"state":"planned"}));
+        let after_create = repo_settings.after_create;
+        let after_remove = repo_settings.after_remove;
+        entries.push(json!({"name":nm,"source":p,"path":dest.join(&nm),"common_dir":common,"base":base,"initial":initial,"branch":branch,"remote":remote,"state":"planned","after_create":after_create,"after_remove":after_remove,"create_hooks_done":false,"remove_hooks_done":false}));
     }
     let v = json!({"version":1,"name":name,"path":dest,"source":src,"state":"creating","created_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs_f64(),"repos":entries});
     save(&v)?;
@@ -362,6 +428,23 @@ fn finish_create(mut r: Value) -> R<Value> {
     }
     r["state"] = json!("ready");
     save(&r)?;
+    for i in 0..len {
+        if r["repos"][i]["create_hooks_done"] == true {
+            continue;
+        }
+        let e = r["repos"][i].clone();
+        let hooks: Vec<String> =
+            serde_json::from_value(e["after_create"].clone()).unwrap_or_default();
+        run_hooks(
+            &hooks,
+            Path::new(e["path"].as_str().unwrap()),
+            r["name"].as_str().unwrap(),
+            &root,
+            e["name"].as_str().unwrap(),
+        )?;
+        r["repos"][i]["create_hooks_done"] = json!(true);
+        save(&r)?;
+    }
     Ok(r)
 }
 fn verify(e: &Value) -> R<()> {
@@ -678,6 +761,27 @@ fn remove(mut r: Value) -> R<Value> {
     }
     r["state"] = json!("removed");
     save(&r)?;
+    finish_remove_hooks(r)
+}
+fn finish_remove_hooks(mut r: Value) -> R<Value> {
+    let len = r["repos"].as_array().ok_or("Invalid record")?.len();
+    for i in 0..len {
+        if r["repos"][i]["remove_hooks_done"] == true {
+            continue;
+        }
+        let e = r["repos"][i].clone();
+        let hooks: Vec<String> =
+            serde_json::from_value(e["after_remove"].clone()).unwrap_or_default();
+        run_hooks(
+            &hooks,
+            Path::new(e["source"].as_str().unwrap()),
+            r["name"].as_str().unwrap(),
+            Path::new(r["path"].as_str().unwrap()),
+            e["name"].as_str().unwrap(),
+        )?;
+        r["repos"][i]["remove_hooks_done"] = json!(true);
+        save(&r)?;
+    }
     Ok(r)
 }
 fn reconcile_removal(r: &mut Value) -> R<()> {
@@ -716,7 +820,10 @@ fn main() {
                 destination,
                 repos,
                 bases,
-            } => Ok((create(&name, &source, &destination, &repos, &bases)?, false)),
+            } => Ok((
+                create(&name, &source, destination.as_deref(), &repos, &bases)?,
+                false,
+            )),
             Cmd::List => {
                 let mut files: Vec<PathBuf> = fs::read_dir(state())
                     .map_err(|e| e.to_string())?
@@ -735,7 +842,9 @@ fn main() {
             Cmd::Resume { name } => {
                 let mut r = load(&name)?;
                 reconcile_removal(&mut r)?;
-                if r["state"] == "removing" {
+                if r["state"] == "removed" {
+                    Ok((finish_remove_hooks(r)?, false))
+                } else if r["state"] == "removing" {
                     Ok((remove(r)?, true))
                 } else {
                     Ok((finish_create(r)?, false))
@@ -753,7 +862,7 @@ fn main() {
                 let mut r = load(&name)?;
                 reconcile_removal(&mut r)?;
                 if r["state"] == "removed" {
-                    Ok((r, false))
+                    Ok((finish_remove_hooks(r)?, false))
                 } else {
                     Ok((remove(r)?, true))
                 }

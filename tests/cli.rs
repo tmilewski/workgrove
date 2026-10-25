@@ -30,6 +30,7 @@ impl Fixture {
     fn cli(&self, args: &[&str]) -> (i32, String, String) {
         let out = Command::new(env!("CARGO_BIN_EXE_workgrove"))
             .env("WORKGROVE_STATE_DIR", &self.state)
+            .env("XDG_CONFIG_HOME", self.root.path().join("config"))
             .args(args)
             .output()
             .unwrap();
@@ -43,6 +44,7 @@ impl Fixture {
         let system_path = std::env::var_os("PATH").unwrap_or_default();
         let out = Command::new(env!("CARGO_BIN_EXE_workgrove"))
             .env("WORKGROVE_STATE_DIR", &self.state)
+            .env("XDG_CONFIG_HOME", self.root.path().join("config"))
             .env(
                 "PATH",
                 format!("{}:{}", path.display(), system_path.to_string_lossy()),
@@ -280,4 +282,155 @@ fn git_output(repo: &Path, args: &[&str]) -> String {
         .unwrap();
     assert!(out.status.success());
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+fn write_json(path: &Path, value: Value) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+}
+
+#[test]
+fn directory_profiles_inherit_and_specific_settings_replace_arrays() {
+    let f = Fixture::new();
+    let web = f.source.join("web");
+    fs::create_dir(&web).unwrap();
+    git(&web, &["init", "-b", "main"]);
+    // Exclusion must happen before Git tries to resolve this empty repo's HEAD.
+    write_json(
+        &f.root.path().join("config/workgrove/config.json"),
+        serde_json::json!({
+            f.source.to_str().unwrap(): {
+                "workspace_destination": "../trees",
+                "include": ["./api", "./web"],
+                "after_create": ["exit 31"],
+                "after_remove": ["exit 32"],
+                "directories": { "./api": { "after_create": ["exit 33"] } }
+            },
+            "/unrelated/workgrove-test-root": {"after_create": ["exit 34"]}
+        }),
+    );
+    write_json(
+        &f.root.path().join(".workgrove.json"),
+        serde_json::json!({
+            "./source": {"exclude": ["./web"], "after_remove": []}
+        }),
+    );
+    write_json(
+        &f.source.join("api/.workgrove.json"),
+        serde_json::json!({
+            "after_create": ["printf local > hook-result"]
+        }),
+    );
+    let (code, out, err) = f.cli(&["create", "task", "--source", f.source.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}: {err}");
+    let record: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(record["repos"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        record["repos"][0]["after_create"],
+        serde_json::json!(["printf local > hook-result"])
+    );
+    assert_eq!(record["repos"][0]["after_remove"], serde_json::json!([]));
+    assert_eq!(
+        fs::read_to_string(f.root.path().join("trees/task/api/hook-result")).unwrap(),
+        "local"
+    );
+}
+
+#[test]
+fn current_repo_uses_flat_settings_and_relative_destination() {
+    let f = Fixture::new();
+    let repo = f.source.join("api");
+    write_json(
+        &repo.join(".workgrove.json"),
+        serde_json::json!({
+            "workspace_destination": "./.workgrove/trees", "after_create": []
+        }),
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_workgrove"))
+        .current_dir(&repo)
+        .env("WORKGROVE_STATE_DIR", &f.state)
+        .env("XDG_CONFIG_HOME", f.root.path().join("config"))
+        .args(["create", "task"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let record: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        record["path"],
+        serde_json::json!(repo.canonicalize().unwrap().join(".workgrove/trees/task"))
+    );
+    assert!(repo.join(".workgrove/trees/task/api/file").is_file());
+}
+
+#[test]
+fn missing_settings_use_default_destination() {
+    let f = Fixture::new();
+    let (code, out, err) = f.cli(&["create", "task", "--source", f.source.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}: {err}");
+    assert!(f.source.join(".workgrove/trees/task/api/file").is_file());
+}
+
+#[test]
+fn explicit_repository_selection_overrides_config_filters() {
+    let f = Fixture::new();
+    write_json(
+        &f.source.join(".workgrove.json"),
+        serde_json::json!({
+            "include": [], "exclude": ["./api"], "workspace_destination": "./unused"
+        }),
+    );
+    let destination = f.root.path().join("explicit");
+    let (code, out, err) = f.cli(&[
+        "create",
+        "task",
+        "--source",
+        f.source.to_str().unwrap(),
+        "--repo",
+        "api",
+        "--destination",
+        destination.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{out}: {err}");
+    assert!(destination.join("api/file").is_file());
+    assert!(!f.source.join("unused").exists());
+}
+
+#[test]
+fn root_profiles_run_distinct_hooks_for_each_included_repo() {
+    let f = Fixture::new();
+    let web = f.source.join("web");
+    fs::create_dir(&web).unwrap();
+    git(&web, &["init", "-b", "main"]);
+    git(&web, &["config", "user.email", "test@example.com"]);
+    git(&web, &["config", "user.name", "Test"]);
+    git(&web, &["commit", "--allow-empty", "-m", "initial"]);
+    write_json(
+        &f.source.join(".workgrove.json"),
+        serde_json::json!({
+            ".": {
+                "include": ["./api", "./web"],
+                "after_create": ["exit 35"],
+                "directories": {
+                    "./api": {"after_create": ["printf api > marker"]},
+                    "./web": {"after_create": ["printf web > marker"]}
+                }
+            }
+        }),
+    );
+    let (code, out, err) = f.cli(&["create", "task", "--source", f.source.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}: {err}");
+    for repo in ["api", "web"] {
+        assert_eq!(
+            fs::read_to_string(
+                f.source
+                    .join(format!(".workgrove/trees/task/{repo}/marker"))
+            )
+            .unwrap(),
+            repo
+        );
+    }
 }
