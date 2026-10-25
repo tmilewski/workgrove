@@ -1,0 +1,53 @@
+name: Create release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Consume changesets
+        id: version
+        run: |
+          version=$(python3 scripts/release.py prepare)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Extract release notes
+        run: python3 scripts/release.py notes > "$RUNNER_TEMP/release-notes.md"
+      - uses: peter-evans/create-pull-request@v7
+        id: pr
+        with:
+          branch: release/next
+          base: main
+          title: Release v${{ steps.version.outputs.version }}
+          commit-message: Release v${{ steps.version.outputs.version }}
+          body-path: ${{ runner.temp }}/release-notes.md
+          add-paths: |
+            Cargo.toml
+            Cargo.lock
+            CHANGELOG.md
+            .changeset/*.md
+      - name: Run CI on the release PR
+        if: steps.pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref release/next
