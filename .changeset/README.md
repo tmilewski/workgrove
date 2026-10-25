@@ -27,7 +27,8 @@ test-only work, add an **empty changeset** instead:
 An optional explanation can follow the empty frontmatter. Empty changesets
 satisfy PR CI but do not bump the version or appear in the changelog. They are
 removed alongside the other changesets when preparing the next real release.
-If only empty changesets exist, release preparation stops without changing files.
+If only empty changesets exist, release preparation stops without changing files
+unless an explicit version is supplied.
 A zero-byte file is not a valid changeset; use the two delimiters shown above.
 
 This is a single-crate implementation of the [Changesets](https://changesets.dev/)
@@ -41,7 +42,8 @@ of consuming the base branch's changesets. A branch name or label cannot bypass
 the check.
 
 Run `python3 scripts/release.py check` to validate pending files. To preview a
-release in a disposable checkout, run `python3 scripts/release.py prepare`. It
+release in a disposable checkout, run `python3 scripts/release.py prepare`. To
+choose the version explicitly, use `python3 scripts/release.py prepare --version 1.2.0`. It
 updates Cargo.toml, Cargo.lock, and CHANGELOG.md, and removes consumed changesets.
 Run `python3 scripts/release.py check --base origin/main` to check a committed PR.
 
@@ -49,8 +51,13 @@ Run `python3 scripts/release.py check --base origin/main` to check a committed P
 
 1. Merge the desired changesets into `main`.
 2. Run **Create release** in GitHub Actions on `main`. It creates or updates the
-   `release/next` PR with the version and changelog changes. Without a changeset
-   requesting a version bump, the workflow fails without creating a PR.
+   `release/next` PR with the version and changelog changes. Optionally fill in
+   **version** (for example, `1.2.0`) to override the changeset bump. Use a stable
+   `major.minor.patch` version greater than the current version, without a `v`
+   prefix. An explicit version also allows a release with only empty changesets
+   or no pending changesets; its notes say there are no end-user CLI changes.
+   Leave the input blank to use the highest changeset bump; without a changeset
+   requesting a bump, that default fails without creating a PR.
 3. Review the release PR and merge after CI passes. Keep this branch generated;
    rerunning the workflow regenerates it from `main`.
 4. Manually run **Publish release** on `main` when ready to publish. Merging a PR

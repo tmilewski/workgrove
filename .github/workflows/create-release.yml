@@ -2,6 +2,11 @@ name: Create release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional version (e.g. 1.2.0); blank uses changesets'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,8 +33,14 @@ jobs:
           python-version: '3.12'
       - name: Consume changesets
         id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          version=$(python3 scripts/release.py prepare)
+          args=()
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            args+=(--version "$REQUESTED_VERSION")
+          fi
+          version=$(python3 scripts/release.py prepare "${args[@]}")
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Extract release notes
         run: python3 scripts/release.py notes > "$RUNNER_TEMP/release-notes.md"

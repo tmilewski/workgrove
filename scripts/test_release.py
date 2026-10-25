@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import subprocess
+import sys
 import tomllib
 import unittest
 
@@ -53,6 +54,65 @@ class ReleaseTests(unittest.TestCase):
     def test_major_resets_lower_components(self):
         self.add_changeset("breaking", "major", "Breaking change.")
         self.assertEqual(release.prepare(self.root), "1.0.0")
+
+    def test_requested_version_overrides_bump_and_passes_pr_check(self):
+        self.add_changeset("fix", "patch", "A fix.")
+        base = self.init_base()
+        self.assertEqual(release.prepare(self.root, "2.0.0"), "2.0.0")
+        self.assertEqual(release.version(self.root), "2.0.0")
+        lock = tomllib.loads((self.root / "Cargo.lock").read_text())
+        self.assertEqual([p["version"] for p in lock["package"]], ["0.1.0", "2.0.0"])
+        self.assertIn("A fix.", release.notes(self.root))
+        self.commit()
+        release.check_pr(self.root, base)
+        (self.root / "code.rs").write_text("Unexpected code")
+        self.commit()
+        with self.assertRaisesRegex(ValueError, "PR must add"):
+            release.check_pr(self.root, base)
+
+    def test_requested_version_with_only_empty_changesets(self):
+        empty = self.root / ".changeset/ci.md"
+        empty.write_text("---\n---\n\nCI only.\n")
+        base = self.init_base()
+        release.prepare(self.root, "0.1.1")
+        self.assertFalse(empty.exists())
+        self.assertIn("no end-user CLI changes", release.notes(self.root))
+        self.assertNotIn("CI only.", release.notes(self.root))
+        self.commit()
+        release.check_pr(self.root, base)
+
+    def test_requested_version_without_changesets(self):
+        base = self.init_base()
+        release.prepare(self.root, "0.10.0")
+        self.assertTrue(release.notes(self.root))
+        self.commit()
+        release.check_pr(self.root, base)
+        changelog = self.root / "CHANGELOG.md"
+        changelog.write_text(changelog.read_text() + "Unexpected notes.\n")
+        self.commit()
+        with self.assertRaisesRegex(ValueError, "PR must add"):
+            release.check_pr(self.root, base)
+
+    def test_invalid_requested_version_leaves_files_unchanged(self):
+        self.add_changeset("fix", "patch", "A fix.")
+        original = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        for requested in ("", "v1.0.0", "1.0", "01.0.0", "1.0.0-rc.1", "1.0.0+build", "0.1.0", "0.0.9"):
+            with self.subTest(version=requested):
+                with self.assertRaises(ValueError):
+                    release.prepare(self.root, requested)
+                self.assertEqual(original, {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()})
+
+    def test_prepare_cli_accepts_version(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        script = scripts / "release.py"
+        script.write_text(Path(release.__file__).read_text())
+        result = subprocess.run(
+            [sys.executable, str(script), "prepare", "--version", "1.2.0"],
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(result.stdout.strip(), "1.2.0")
+        self.assertEqual(release.version(self.root), "1.2.0")
 
     def test_empty_release_fails_without_writing(self):
         with self.assertRaisesRegex(ValueError, "No changesets"):
