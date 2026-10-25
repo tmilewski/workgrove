@@ -145,10 +145,10 @@ fn expand_user(path: &Path) -> PathBuf {
     if path == Path::new("~") {
         return dirs::home_dir().unwrap_or_else(|| path.to_path_buf());
     }
-    if let Ok(rest) = path.strip_prefix("~") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Ok(rest) = path.strip_prefix("~")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
     path.to_path_buf()
 }

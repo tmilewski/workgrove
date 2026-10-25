@@ -243,10 +243,37 @@ precede the subcommand. Exit codes:
 ## Development
 
 ```sh
-cargo test
-cargo build --release
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo build --locked --release
+python3 scripts/release.py check
+python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
 Tests create real temporary Git repositories and worktrees, exercise cleanup
 blockers and recovery, and use a local bare Git remote with a mocked `gh` response
 to cover merged pull request verification.
+
+PR CI runs **Check Formatting** and **Check Changesets** in parallel, then starts
+**Run Test Matrix** on Linux and macOS only after both pass and Rust source,
+Cargo files, test fixtures, launcher scripts, or build/CI configuration changes.
+Documentation-only PRs skip the Rust matrix. Rust dependencies and build outputs
+are cached per platform and build mode; Linux installs `lsof` only if missing.
+New PR commits cancel superseded CI runs for that PR.
+
+A separate
+**Test Changeset Script** job runs after those checks only when
+`scripts/release.py` or `scripts/test_release.py` changes. For PRs, it checks the
+whole PR diff; for pushes, the pushed commit range; for manual runs, the branch
+diff against `main` (or the latest commit when running on `main`). Release
+tooling requires Python 3.11+.
+PRs run Clippy and tests without an optimized build. Manual **Publish release**
+always runs the full Rust matrix and optimized builds, regardless of changed files.
+Add a new [changeset](.changeset/README.md) in every ordinary PR; use an empty
+changeset when the PR has no effect on the end-user CLI. The **Create
+release** workflow turns pending changesets into a version and changelog PR;
+review and merge it manually, then manually run **Publish release**. Merging
+alone never publishes. External contributors' CI requires maintainer approval
+through the repository settings documented in the changeset guide, including
+the setting to apply when making the repository public.

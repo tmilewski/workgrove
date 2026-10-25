@@ -193,7 +193,7 @@ fn merged_github_pr_with_exact_head_allows_cleanup() {
     let source_repo = f.source.join("api");
     let bare = f.root.path().join("remote.git");
     let status = Command::new("git")
-        .args(["init", "--bare", bare.to_str().unwrap()])
+        .args(["init", "--bare", "-b", "main", bare.to_str().unwrap()])
         .status()
         .unwrap();
     assert!(status.success());

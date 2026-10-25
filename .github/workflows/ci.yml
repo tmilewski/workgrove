@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-check:
+        description: Run the full Rust matrix and optimized builds before publishing
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  formatting:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  changesets:
+    name: Check Changesets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      script-changed: ${{ steps.file-changes.outputs.script-changed }}
+      rust-changed: ${{ steps.file-changes.outputs.rust-changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 scripts/release.py check
+      - name: Require a changeset for this PR
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/release.py check --base "$BASE_SHA"
+      - name: Check manually dispatched branch changes
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: python3 scripts/release.py check --base origin/main
+      - name: Detect script and Rust changes
+        id: file-changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            base=$(git merge-base "$PR_BASE" HEAD)
+          elif [[ "$EVENT_NAME" == push ]]; then
+            if [[ "$PUSH_BASE" == 0000000000000000000000000000000000000000 ]]; then
+              base=$(git hash-object -t tree /dev/null)
+            else
+              base="$PUSH_BASE"
+            fi
+          elif [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            base=$(git merge-base origin/main HEAD)
+          elif git rev-parse --verify HEAD^ > /dev/null 2>&1; then
+            base=$(git rev-parse HEAD^)
+          else
+            base=$(git hash-object -t tree /dev/null)
+          fi
+          git diff --name-only "$base" HEAD -- scripts/release.py scripts/test_release.py > "$RUNNER_TEMP/changeset-script-files"
+          if [[ -s "$RUNNER_TEMP/changeset-script-files" ]]; then
+            echo "script-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "script-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          git diff --name-only "$base" HEAD -- \
+            ':(glob)**/*.rs' ':(glob)**/Cargo.toml' ':(glob)**/Cargo.lock' \
+            src tests benches examples bin .cargo .github/workflows .github/actions \
+            rust-toolchain rust-toolchain.toml clippy.toml .clippy.toml \
+            rustfmt.toml .rustfmt.toml > "$RUNNER_TEMP/rust-files"
+          if [[ -s "$RUNNER_TEMP/rust-files" ]]; then
+            echo "rust-changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust-changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  test-changesets:
+    name: Test Changeset Script
+    needs: [formatting, changesets]
+    if: needs.changesets.outputs.script-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+  test:
+    name: Run Test Matrix (${{ matrix.os }})
+    needs: [formatting, changesets]
+    if: inputs.release-check || needs.changesets.outputs.rust-changed == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ inputs.release-check && 'release' || 'test' }}
+      - name: Install Linux test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v lsof > /dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y lsof
+          fi
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - name: Verify optimized release build
+        if: inputs.release-check
+        run: cargo build --locked --release
