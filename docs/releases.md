@@ -10,9 +10,9 @@ and release procedure are defined in [the changeset guide](../.changeset/README.
 - Validate all input changesets and Cargo version consistency before writes.
   Only update Workgrove's lockfile entry; preserve dependency versions and prior
   changelog entries.
-- Require changesets only for user-facing changes. Documentation, CI, tests,
-  and internal refactoring with no CLI behavior change do not need one; do not
-  create an empty changeset solely for those changes.
+- Every ordinary PR needs its own new changeset. User-facing changes require a
+  version bump; docs, CI, tests, and internal refactoring with unchanged CLI
+  behavior require a file with empty frontmatter instead.
 - Existing empty changesets remain supported by the release script and do not
   request a version bump. The highest requested bump wins. Preserve failure
   without writes when no changeset requests a release.
@@ -20,13 +20,20 @@ and release procedure are defined in [the changeset guide](../.changeset/README.
   it is not a check of uncommitted new files. The release-PR exception must match
   generated release output exactly, never just a branch name or label.
 
-## Current validation limitation
+## Non-user-facing changes
 
-`scripts/release.py check --base REF` still requires every ordinary PR to add a
-changeset, and CI invokes that check. This predates the policy above; a
-non-user-facing PR without a changeset can therefore fail that check. Updating
-that enforcement is separate from maintaining these guides. Do not describe the
-current validator as already implementing the exemption.
+Add a uniquely named `.changeset/*.md` file with empty frontmatter:
+
+```markdown
+---
+---
+```
+
+An optional explanation may follow. This file records that the PR was assessed
+as having no user-facing impact; it does not bump the version or produce release
+notes. A zero-byte file is invalid. `check --base REF` requires a new file in the
+committed PR diff; an existing pending changeset does not satisfy another PR.
+Only a PR containing exactly the generated release changes is exempt.
 
 For release tooling changes, run from the repository root:
 

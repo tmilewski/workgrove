@@ -1,6 +1,7 @@
 # Changesets
 
-Every PR with user-facing changes must add a uniquely named Markdown file here, such as
+Every ordinary PR must add a uniquely named Markdown file here. For user-facing
+changes, request a version bump, such as
 `.changeset/clear-cleanup-errors.md`:
 
 ```markdown
@@ -16,12 +17,18 @@ The highest requested bump wins; several patch changesets produce one patch bump
 Minor and major bumps reset the lower components. This also applies before 1.0:
 a `major` changeset for 0.1.0 produces 1.0.0.
 
-Changes with no effect on the end-user CLI do not need a changeset. This includes
-documentation, CI, tests, and internal refactoring that preserves CLI behavior.
-Do not add empty changesets just for these changes.
+For changes with no effect on the end-user CLI, add a file with **empty
+frontmatter** instead. This includes documentation, CI, tests, and internal
+refactoring that preserves CLI behavior:
 
-Existing empty changesets remain supported. They do not bump the version or
-appear in the changelog and are consumed alongside the next real release.
+```markdown
+---
+---
+```
+
+An optional explanation may follow the frontmatter. A zero-byte file is invalid.
+Empty changesets do not bump the version or appear in the changelog and are
+consumed alongside the next real release.
 If only empty changesets exist, release preparation stops without changing files.
 
 This is a single-crate implementation of the [Changesets](https://changesets.dev/)
@@ -30,12 +37,11 @@ either empty or exactly one `workgrove: patch|minor|major` line as shown above
 (the package name may be quoted). Prereleases, multiple packages, and general
 YAML are not supported.
 
-The current CI validator still requires every ordinary PR to add its own valid
-file; it has not yet implemented the non-user-facing exemption above. An existing
-changeset on `main` does not satisfy it. Its only current exception is a release
-PR whose entire diff exactly matches the output of consuming the base branch's
-changesets. A branch name or label cannot bypass the check. See
-[release guidance](../docs/releases.md#current-validation-limitation).
+CI requires every ordinary PR to add its own valid changeset, including an
+empty-frontmatter file for non-user-facing changes. An existing changeset on
+`main` does not satisfy it. The only exception is a release PR whose entire diff
+exactly matches the output of consuming the base branch's changesets. A branch
+name or label cannot bypass the check.
 
 Run `python3 scripts/release.py check` to validate pending files. To preview a
 release in a disposable checkout, run `python3 scripts/release.py prepare`. It

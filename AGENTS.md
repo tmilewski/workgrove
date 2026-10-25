@@ -18,7 +18,6 @@ Update the relevant `docs/` guide in the same change as code, workflows, or new
 requirements. Remove stale guidance, keep links current, and reconcile related
 README instructions. Keep this file short; put details in focused guides.
 
-Only user-facing changes need a changeset. Do not add empty changesets for docs,
-CI, tests, or internal refactoring with unchanged CLI behavior. See the release
-guide for the current CI enforcement gap. Run the relevant validation and report
-what passed or could not run.
+Every ordinary PR needs a new changeset. Use a version bump for user-facing
+changes and empty frontmatter for non-user-facing changes; see the release guide.
+Run the relevant validation and report what passed or could not run.
