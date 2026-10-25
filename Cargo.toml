@@ -1,0 +1,18 @@
+[package]
+name = "workgrove"
+version = "0.1.0"
+edition = "2024"
+description = "Coordinated Git workspaces with conservative cleanup"
+
+[[bin]]
+name = "workgrove"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
+serde_json = "1"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
