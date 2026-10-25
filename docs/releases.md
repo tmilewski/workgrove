@@ -15,7 +15,8 @@ and release procedure are defined in [the changeset guide](../.changeset/README.
   behavior require a file with empty frontmatter instead.
 - Existing empty changesets remain supported by the release script and do not
   request a version bump. The highest requested bump wins. Preserve failure
-  without writes when no changeset requests a release.
+  without writes when no changeset requests a release and no explicit version
+  is supplied.
 - `check --base REF` compares committed history against the merge base with HEAD;
   it is not a check of uncommitted new files. The release-PR exception must match
   generated release output exactly, never just a branch name or label.

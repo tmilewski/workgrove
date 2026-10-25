@@ -29,7 +29,8 @@ refactoring that preserves CLI behavior:
 An optional explanation may follow the frontmatter. A zero-byte file is invalid.
 Empty changesets do not bump the version or appear in the changelog and are
 consumed alongside the next real release.
-If only empty changesets exist, release preparation stops without changing files.
+If only empty changesets exist, release preparation stops without changing files
+unless an explicit version is supplied.
 
 This is a single-crate implementation of the [Changesets](https://changesets.dev/)
 approach, using Python 3.11+ without Node or npm. The supported frontmatter is
@@ -44,7 +45,8 @@ exactly matches the output of consuming the base branch's changesets. A branch
 name or label cannot bypass the check.
 
 Run `python3 scripts/release.py check` to validate pending files. To preview a
-release in a disposable checkout, run `python3 scripts/release.py prepare`. It
+release in a disposable checkout, run `python3 scripts/release.py prepare`. To
+choose the version explicitly, use `python3 scripts/release.py prepare --version 1.2.0`. It
 updates Cargo.toml, Cargo.lock, and CHANGELOG.md, and removes consumed changesets.
 Run `python3 scripts/release.py check --base origin/main` to check a committed PR.
 
@@ -52,15 +54,23 @@ Run `python3 scripts/release.py check --base origin/main` to check a committed P
 
 1. Merge the desired changesets into `main`.
 2. Run **Create release** in GitHub Actions on `main`. It creates or updates the
-   `release/next` PR with the version and changelog changes. Without a changeset
-   requesting a version bump, the workflow fails without creating a PR.
+   `release/next` PR with the version and changelog changes. Optionally fill in
+   **version** (for example, `1.2.0`) to override the changeset bump. Use a stable
+   `major.minor.patch` version greater than the current version, without a `v`
+   prefix. An explicit version also allows a release with only empty changesets
+   or no pending changesets; its notes say there are no end-user CLI changes.
+   Leave the input blank to use the highest changeset bump; without a changeset
+   requesting a bump, that default fails without creating a PR.
 3. Review the release PR and merge after CI passes. Keep this branch generated;
    rerunning the workflow regenerates it from `main`.
 4. Manually run **Publish release** on `main` when ready to publish. Merging a PR
    never publishes a release. The workflow runs CI on the selected commit, then
    creates `vX.Y.Z` and a GitHub release using that version's changelog entry.
-   Releases contain GitHub's
-   source archives; this workflow does not publish to crates.io or attach binaries.
+   Releases include executable archives for macOS (Intel and Apple Silicon) and
+   Linux (x86_64 and ARM64), plus `SHA256SUMS` and GitHub's source archives.
+   Each executable is built and smoke-tested on its native OS and architecture.
+   New releases remain drafts until all downloads are uploaded. This workflow
+   does not publish to crates.io.
 
 To let **Create release** open its PR, GitHub requires **Settings → Actions →
 General → Allow GitHub Actions to create and approve pull requests**. This is a
@@ -75,7 +85,8 @@ Create release explicitly dispatches CI on the generated branch
 because PRs created with that token do not automatically trigger PR workflows.
 
 If publishing fails, rerun the failed workflow on the original release commit.
-An already published release is skipped. An existing tag must point to that
+An existing release has its downloadable assets replaced, so reruns repair
+incomplete uploads. An existing tag must point to that
 exact commit. Both release workflows are manual-only and run only on `main`.
 
 ## Contributor approval
