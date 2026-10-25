@@ -16,8 +16,59 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       release-check: true
-  publish:
+  build:
     needs: verify
+    name: Build download (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: download-${{ matrix.target }}
+      - name: Build and package executable
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          cargo build --locked --release --target "$TARGET"
+          version=$(python3 scripts/release.py version)
+          mkdir -p dist package
+          cp "target/$TARGET/release/workgrove" package/
+          cp README.md package/
+          tar -czf "dist/workgrove-v$version-$TARGET.tar.gz" -C package workgrove README.md
+          mkdir smoke
+          tar -xzf "dist/workgrove-v$version-$TARGET.tar.gz" -C smoke
+          ./smoke/workgrove --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [verify, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -29,6 +80,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Check downloads and generate checksums
+        working-directory: dist
+        run: |
+          version=$(python3 ../scripts/release.py version)
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+            test -s "workgrove-v$version-$target.tar.gz"
+          done
+          sha256sum *.tar.gz > SHA256SUMS
       - name: Tag and publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,7 +107,9 @@ jobs:
             git push origin "refs/tags/$tag"
           fi
           if gh release view "$tag" > /dev/null 2>&1; then
-            echo "Release $tag already exists"
+            echo "Updating assets for release $tag"
           else
-            gh release create "$tag" --verify-tag --title "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"
+            gh release create "$tag" --verify-tag --draft --title "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
+          gh release upload "$tag" dist/*.tar.gz dist/SHA256SUMS --clobber
+          gh release edit "$tag" --draft=false

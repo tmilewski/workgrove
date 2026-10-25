@@ -4,13 +4,19 @@ Create one isolated working folder spanning several independent Git repositories
 Keep separate branches and PRs, then retire the group after checking every checkout.
 Workgrove is a standalone tool; Orca or another editor can invoke it.
 
-Requires macOS or Linux, Rust, Git, and `lsof`. GitHub repositories also
+Requires macOS or Linux, Git, and `lsof`. GitHub repositories also
 require an authenticated `gh` CLI with access to their pull requests. Cargo downloads
-the Rust crate dependencies on the first build.
+the Rust crate dependencies on the first build when building from source.
 
 ## Run it
 
-Build the executable, then run it directly:
+Download the archive for your OS and CPU from [GitHub Releases](https://github.com/tmilewski/workgrove/releases).
+macOS downloads support Intel (`x86_64`) and Apple Silicon (`aarch64`);
+Linux downloads support x86_64 and ARM64 (`aarch64`) and are built on Ubuntu 24.04
+with glibc. Extract the archive and put `workgrove` on your PATH. `SHA256SUMS`
+contains the SHA-256 checksum of each archive. Rust is not required for these downloads.
+
+To build from source, install Rust and run:
 
 ```sh
 cargo build --release
