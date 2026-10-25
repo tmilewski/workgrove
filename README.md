@@ -270,8 +270,10 @@ diff against `main` (or the latest commit when running on `main`). Release
 tooling requires Python 3.11+.
 PRs run Clippy and tests without an optimized build. Manual **Publish release**
 always runs the full Rust matrix and optimized builds, regardless of changed files.
-Add a new [changeset](.changeset/README.md) in every ordinary PR; use an empty
-changeset when the PR has no effect on the end-user CLI. The **Create
+Add a new [changeset](.changeset/README.md) for user-facing changes. Changes with
+no effect on the end-user CLI do not need one. The current CI validator still
+enforces the older every-PR requirement; see the
+[validation limitation](docs/releases.md#current-validation-limitation). The **Create
 release** workflow turns pending changesets into a version and changelog PR;
 review and merge it manually, then manually run **Publish release**. Merging
 alone never publishes. External contributors' CI requires maintainer approval
